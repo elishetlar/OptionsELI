@@ -2,7 +2,7 @@
 
 set -e
 
-PROJECT_DIR="/Users/elishetlar/Documents/ChatGPT/OptionsELI"
+PROJECT_DIR="${0:A:h}"
 PYTHON="$PROJECT_DIR/.venv/bin/python"
 URL="http://localhost:8501"
 

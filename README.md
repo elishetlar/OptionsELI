@@ -34,7 +34,7 @@ GitHub, server-side secrets, testing, and anonymous-sharing checklist.
 2. Change into this project folder:
 
    ```bash
-   cd "/Users/elishetlar/Documents/ChatGPT/OptionsELI"
+   cd "/path/to/OptionsELI"
    ```
 
 3. Confirm Python 3.11+ is available: `python3 --version`. If it is missing, install

@@ -1,6 +1,6 @@
 from optionseli.config import get_settings
 from optionseli.rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
-from optionseli.ui_policy import available_pages
+from optionseli.ui_policy import available_pages, options_scan_available
 
 
 def test_streamlit_secrets_override_local_environment(tmp_path, monkeypatch):
@@ -41,3 +41,9 @@ def test_shared_rate_limiter_rejects_excess_requests():
         assert "Try again" in str(exc)
     else:
         raise AssertionError("Expected the third request to be rate limited")
+
+
+def test_options_scanner_availability_without_credentials():
+    assert options_scan_available(False, False) is False
+    assert options_scan_available(True, False) is True
+    assert options_scan_available(False, True) is True

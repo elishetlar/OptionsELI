@@ -22,7 +22,7 @@ The local application remains unchanged when `OPTIONSELI_PUBLIC_MODE=false`.
 From the project folder, confirm sensitive files are ignored:
 
 ```bash
-cd "/Users/elishetlar/Documents/ChatGPT/OptionsELI"
+cd "/path/to/OptionsELI"
 git check-ignore .env data/optionseli.db .venv .streamlit/secrets.toml
 git status --short --ignored
 ```

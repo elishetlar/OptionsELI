@@ -10,3 +10,7 @@ def available_pages(public_mode: bool) -> list[str]:
     if not public_mode:
         pages.extend(PRIVATE_PAGES)
     return pages
+
+
+def options_scan_available(demo_mode: bool, tradier_configured: bool) -> bool:
+    return demo_mode or tradier_configured

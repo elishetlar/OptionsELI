@@ -9,7 +9,7 @@ def yahoo_history(symbol: str, period: str = "1y", interval: str = "1d") -> tupl
     import yfinance as yf
 
     ticker = "^VIX" if symbol.upper() == "VIX" else symbol.upper()
-    df = yf.download(ticker, period=period, interval=interval, auto_adjust=False, progress=False, threads=False)
+    df = yf.download(ticker, period=period, interval=interval, auto_adjust=False, progress=False, threads=False, timeout=12)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     if df.empty:

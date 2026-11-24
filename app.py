@@ -11,6 +11,7 @@ from optionseli.backtest import underlying_signal_test
 from optionseli.config import DEFAULTS, LIQUID_UNIVERSE, get_settings
 from optionseli.database import add_trade, connect, journal_metrics, load_trades
 from optionseli.demo_data import demo_option_chain, demo_prices
+from optionseli.diagnostics import log_event, log_failure
 from optionseli.indicators import calculate_indicators, latest_snapshot
 from optionseli.market_data import yahoo_history
 from optionseli.rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
@@ -18,7 +19,7 @@ from optionseli.scoring import score_candidate
 from optionseli.settings_store import masked_token_hint, save_market_settings
 from optionseli.spreads import build_credit_spreads, payoff_at_expiration
 from optionseli.tradier import TradierClient, TradierError
-from optionseli.ui_policy import available_pages
+from optionseli.ui_policy import available_pages, options_scan_available
 
 st.set_page_config(page_title="OptionsELI", page_icon="📈", layout="wide")
 st.markdown("""
@@ -128,6 +129,7 @@ st.sidebar.caption("Market & options research")
 pages = available_pages(settings.public_mode)
 page = st.sidebar.radio("Workspace", pages)
 demo = st.sidebar.toggle("Demonstration mode", value=settings.demo_mode, help="Uses clearly labeled synthetic prices and option chains.")
+log_event("page_render", page=page, public_mode=settings.public_mode, demo_mode=demo)
 if demo:
     st.markdown("<div class='demo-banner'>DEMONSTRATION MODE — all displayed prices and option contracts are synthetic and must not be used for trading.</div>", unsafe_allow_html=True)
 st.sidebar.warning("Research only. Options involve substantial risk. No order execution is included.")
@@ -157,17 +159,24 @@ if page == "Market Overview":
             column.metric(symbol, f"{snap['Price']:.2f}", f"{(snap['Price']/previous-1)*100:.2f}%")
             column.caption(f"{snap['Trend']} · RSI {snap['RSI']:.1f}")
         except Exception as exc:
+            log_failure("market_overview_symbol_failed", exc, symbol=symbol)
             column.error(f"{symbol}: {exc}")
-    selected = st.selectbox("Chart", list(datasets), index=0)
+    selected = st.selectbox("Chart", list(datasets), index=0) if datasets else None
     if selected:
         st.plotly_chart(chart_prices(datasets[selected][0], selected), width="stretch")
         source_line(datasets[selected][1])
+    else:
+        st.warning("Market history is temporarily unavailable. Try again later or use Demonstration mode.")
     st.subheader("Economic events")
     st.info("No verified economic-calendar provider is configured. OptionsELI intentionally displays no events rather than inventing dates. Add an approved calendar source in Phase 2.")
 
 elif page == "Stock Scanner":
     st.title("Stock Scanner")
-    selected = st.multiselect("Universe (50 liquid stocks and ETFs)", LIQUID_UNIVERSE, default=LIQUID_UNIVERSE[:10])
+    selected = st.multiselect(
+        "Universe (50 liquid stocks and ETFs)", LIQUID_UNIVERSE,
+        default=LIQUID_UNIVERSE[:10], max_selections=20 if settings.public_mode else None,
+        help="Public scans are limited to 20 symbols per run to protect shared data services." if settings.public_mode else None,
+    )
     trend_filter = st.selectbox("Trend filter", ["All", "Bullish", "Mixed", "Bearish"])
     if st.button("Run stock scan", type="primary"):
         rows, last_meta, failures = [], None, []
@@ -177,6 +186,7 @@ elif page == "Stock Scanner":
                 df, last_meta = get_prices(symbol, demo)
                 rows.append({"Symbol": symbol, **latest_snapshot(df)})
             except Exception as exc:
+                log_failure("stock_scan_symbol_failed", exc, symbol=symbol)
                 failures.append(f"{symbol}: {exc}")
             progress.progress((i + 1) / max(1, len(selected)))
         result = pd.DataFrame(rows)
@@ -189,8 +199,9 @@ elif page == "Stock Scanner":
 elif page == "Options Scanner":
     st.title("Options Credit Spread Scanner")
     st.caption("Same-expiration verticals from actual Tradier chains in API mode. The engine may return no qualifying trades.")
-    if not demo and not settings.tradier_token:
-        st.error("Options scanning is unavailable because no Tradier token is configured. Open Settings to add and test a token, or enable Demonstration mode.")
+    scan_available = options_scan_available(demo, bool(settings.tradier_token))
+    if not scan_available:
+        st.error("Options scanning is temporarily unavailable because the server-side market-data connection is not configured. Demonstration mode remains available.")
     c1, c2, c3 = st.columns(3)
     if settings.public_mode:
         symbol = c1.selectbox("Underlying", LIQUID_UNIVERSE, index=0)
@@ -209,7 +220,7 @@ elif page == "Options Scanner":
     min_oi = c3.number_input("Minimum leg open interest", 0, 100000, DEFAULTS["min_open_interest"], 25)
     fees = c4.number_input("Round-trip costs / spread", 0.0, 50.0, DEFAULTS["transaction_cost"], .10)
     exclude_earnings = st.checkbox("Exclude upcoming earnings", True, help="In v1 this requires verified earnings data; scans are blocked for individual stocks when enabled and no calendar is configured.")
-    if st.button("Scan option chains", type="primary"):
+    if st.button("Scan option chains", type="primary", disabled=not scan_available):
         if not width:
             st.error("Select at least one spread width.")
         elif exclude_earnings and symbol not in {"SPY", "QQQ", "IWM", "DIA", "GLD", "TLT"}:
@@ -223,6 +234,8 @@ elif page == "Options Scanner":
                 else:
                     expirations = get_tradier_expirations(symbol)
                     eligible = [x for x in expirations if dte[0] <= (x - date.today()).days <= dte[1]][:settings.max_expirations_per_scan]
+                    if not eligible:
+                        st.info("No listed expirations fall within the selected date range.")
                     frames, metas = [], []
                     for expiration in eligible:
                         frame, chain_meta = get_tradier_chain(symbol, expiration.isoformat())
@@ -260,7 +273,11 @@ elif page == "Options Scanner":
                 if chain.get("delta", pd.Series(dtype=float)).isna().any():
                     st.warning("One or more Tradier contracts have missing Greeks. They were excluded; no model estimates were substituted.")
             except (RateLimitExceeded, TradierError, RuntimeError, ValueError) as exc:
+                log_failure("options_scan_failed", exc, symbol=symbol)
                 st.error(str(exc))
+            except Exception as exc:
+                log_failure("options_scan_unexpected_failure", exc, symbol=symbol)
+                st.error("The options scan could not be completed. No order was sent. Please try again later.")
 
 elif page == "Trade Journal" and not settings.public_mode:
     st.title("Trade Journal")
@@ -292,16 +309,22 @@ elif page == "Testing Lab":
     holding = st.slider("Forward holding period (trading days)", 1, 30, 10)
     costs = st.number_input("Underlying-model transaction cost (basis points)", 0.0, 100.0, 5.0)
     if st.button("Run signal test", type="primary"):
-        df, meta = get_prices(symbol, demo)
-        result = underlying_signal_test(df, holding, costs)
-        if result.empty:
-            st.info("Not enough history for this test.")
-        else:
-            st.metric("Average conditional forward return", f"{result.loc[result.signal == 1, 'test_return'].mean()*100:.2f}%")
-            curve = (1 + result.test_return.fillna(0)).cumprod()
-            st.line_chart(curve)
-            st.caption("Signals are shifted one bar to avoid look-ahead bias; future returns are used only as outcomes. This is not an options backtest.")
-        source_line(meta)
+        try:
+            df, meta = get_prices(symbol, demo)
+            result = underlying_signal_test(df, holding, costs)
+            if result.empty:
+                st.info("Not enough history for this test.")
+            else:
+                active = result.loc[result.signal == 1, "test_return"]
+                average = active.mean() if not active.empty else float("nan")
+                st.metric("Average conditional forward return", f"{average*100:.2f}%" if pd.notna(average) else "Unavailable")
+                curve = (1 + result.test_return.fillna(0)).cumprod()
+                st.line_chart(curve)
+                st.caption("Signals are shifted one bar to avoid look-ahead bias; future returns are used only as outcomes. This is not an options backtest.")
+            source_line(meta)
+        except Exception as exc:
+            log_failure("testing_lab_failed", exc, symbol=symbol)
+            st.error("Historical price data is temporarily unavailable. Try again later or use Demonstration mode.")
 
 elif page == "Settings" and not settings.public_mode:
     st.title("Settings")

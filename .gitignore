@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.venv/
+.venv.broken-*/
+.python/
+.python-cache/
+.tools/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+data/*.db
+data/*.db-*
+*.sqlite
+*.sqlite3
+.DS_Store

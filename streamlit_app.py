@@ -1,7 +1,7 @@
-"""Public Streamlit Community Cloud entrypoint.
+"""Private, authenticated Streamlit Community Cloud entrypoint.
 
-This module forces the read-only public policy before loading the shared application.
-Run ``app.py`` locally to retain private Settings and Trade Journal pages.
+Authentication completes before the shared application or any market-data client is
+loaded. Run ``app.py`` locally to retain local Settings and Trade Journal pages.
 """
 
 import importlib
@@ -10,7 +10,11 @@ import runpy
 import sys
 from pathlib import Path
 
-os.environ["OPTIONSELI_FORCE_PUBLIC_MODE"] = "true"
+import streamlit as st
+
+from optionseli.cloud_auth import run_authenticated_app
+
+os.environ["OPTIONSELI_FORCE_PRIVATE_CLOUD_MODE"] = "true"
 
 # Streamlit reruns this entrypoint in a long-lived interpreter. Invalidate source
 # caches and discard OptionsELI modules from an earlier deployment so a new app.py
@@ -27,7 +31,10 @@ for module_name in (
 ):
     sys.modules.pop(module_name, None)
 
-# Streamlit executes this entrypoint again for every widget interaction. A normal
-# ``import app`` is cached by Python and renders nothing on the second run. run_path
-# deliberately executes the shared app on every rerun.
-runpy.run_path(str(Path(__file__).with_name("app.py")), run_name="__main__")
+try:
+    cloud_secrets = dict(st.secrets)
+except (FileNotFoundError, RuntimeError):
+    cloud_secrets = {}
+
+# No app module or market-data code is imported until this gate succeeds.
+run_authenticated_app(st, cloud_secrets, Path(__file__).with_name("app.py"), runpy.run_path)

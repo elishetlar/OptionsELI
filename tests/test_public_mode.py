@@ -31,6 +31,16 @@ def test_force_public_mode_cannot_be_overridden(tmp_path, monkeypatch):
     assert get_settings(env_file).public_mode is True
 
 
+def test_private_cloud_mode_uses_hosted_read_only_policy(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPTIONSELI_PUBLIC_MODE='false'\n")
+    monkeypatch.setenv("OPTIONSELI_FORCE_PRIVATE_CLOUD_MODE", "true")
+    settings = get_settings(env_file)
+    assert settings.private_cloud_mode is True
+    assert settings.public_mode is True
+    assert settings.private_cloud_tradier_authorized is False
+
+
 def test_shared_rate_limiter_rejects_excess_requests():
     limiter = SlidingWindowRateLimiter(2, 60)
     limiter.acquire()

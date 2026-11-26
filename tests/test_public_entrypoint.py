@@ -3,12 +3,20 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from optionseli.config import Settings
 from optionseli.demo_data import demo_prices
 
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "streamlit_app.py"
+
+
+@pytest.fixture(autouse=True)
+def authenticated_cloud_session(monkeypatch):
+    import optionseli.cloud_auth
+
+    monkeypatch.setattr(optionseli.cloud_auth, "require_cloud_auth", lambda st, secrets: True)
 
 
 def test_public_entrypoint_executes_app_on_every_rerun(monkeypatch):

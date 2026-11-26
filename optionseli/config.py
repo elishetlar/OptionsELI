@@ -26,8 +26,11 @@ class Settings:
     db_path: Path = field(default_factory=lambda: Path(os.getenv("OPTIONSELI_DB_PATH", "data/optionseli.db")))
     public_mode: bool = field(default_factory=lambda: (
         os.getenv("OPTIONSELI_FORCE_PUBLIC_MODE", "false").lower() in {"1", "true", "yes"}
+        or os.getenv("OPTIONSELI_FORCE_PRIVATE_CLOUD_MODE", "false").lower() in {"1", "true", "yes"}
         or os.getenv("OPTIONSELI_PUBLIC_MODE", "false").lower() in {"1", "true", "yes"}
     ))
+    private_cloud_mode: bool = field(default_factory=lambda: os.getenv("OPTIONSELI_FORCE_PRIVATE_CLOUD_MODE", "false").lower() in {"1", "true", "yes"})
+    private_cloud_tradier_authorized: bool = field(default_factory=lambda: os.getenv("OPTIONSELI_PRIVATE_CLOUD_TRADIER_AUTHORIZED", "false").lower() in {"1", "true", "yes"})
     api_calls_per_minute: int = field(default_factory=lambda: int(os.getenv("OPTIONSELI_API_CALLS_PER_MINUTE", "50")))
     max_expirations_per_scan: int = field(default_factory=lambda: int(os.getenv("OPTIONSELI_MAX_EXPIRATIONS_PER_SCAN", "4")))
     public_tradier_authorized: bool = field(default_factory=lambda: os.getenv("OPTIONSELI_PUBLIC_TRADIER_AUTHORIZED", "false").lower() in {"1", "true", "yes"})

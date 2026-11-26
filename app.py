@@ -129,7 +129,10 @@ st.sidebar.title("OptionsELI")
 st.sidebar.caption("Market & options research")
 pages = available_pages(settings.public_mode)
 page = st.sidebar.radio("Workspace", pages)
-public_demo_required = settings.public_mode and not settings.public_tradier_authorized
+hosted_tradier_allowed = settings.public_tradier_authorized or (
+    settings.private_cloud_mode and settings.private_cloud_tradier_authorized
+)
+public_demo_required = settings.public_mode and not hosted_tradier_allowed
 demo = st.sidebar.toggle(
     "Demonstration mode",
     value=True if public_demo_required else settings.demo_mode,
@@ -141,12 +144,12 @@ if demo:
     st.markdown("<div class='demo-banner'>DEMONSTRATION MODE — all displayed prices and option contracts are synthetic and must not be used for trading.</div>", unsafe_allow_html=True)
 st.sidebar.warning("Research only. Options involve substantial risk. No order execution is included.")
 if settings.public_mode:
-    st.sidebar.caption("Public read-only edition · No accounts, journal, credentials, or order routing")
+    st.sidebar.caption("Hosted read-only edition · No journal, credential controls, or order routing")
 
 if demo:
     data_badge("DEMONSTRATION", "demo", "Synthetic prices and chains; no market connection is being used.")
-elif settings.public_mode and not settings.public_tradier_authorized:
-    data_badge("PUBLIC TRADIER DATA DISABLED", "offline", "Tradier personal API data cannot be redistributed. Demonstration mode remains available pending Partner authorization.")
+elif settings.public_mode and not hosted_tradier_allowed:
+    data_badge("CLOUD TRADIER DATA DISABLED", "offline", "Cloud use of the personal Tradier token is awaiting explicit Tradier authorization. Demonstration mode remains available.")
 elif not settings.tradier_token:
     data_badge("MARKET DATA NOT CONFIGURED", "offline", "Tradier token missing. Stock pages may use delayed Yahoo data; options scanning is unavailable.")
 elif "sandbox" in settings.tradier_base_url:
@@ -208,11 +211,11 @@ elif page == "Stock Scanner":
 elif page == "Options Scanner":
     st.title("Options Credit Spread Scanner")
     st.caption("Automatic mode evaluates both directions, market regime, technical placement, liquidity and risk/reward. A scan may correctly return No Trade.")
-    public_tradier_allowed = not settings.public_mode or settings.public_tradier_authorized
+    public_tradier_allowed = not settings.public_mode or hosted_tradier_allowed
     scan_available = options_scan_available(demo, bool(settings.tradier_token), public_tradier_allowed)
     if not scan_available:
-        if settings.public_mode and not settings.public_tradier_authorized:
-            st.error("Live Tradier options data is unavailable in the public edition pending Tradier Partner authorization. Personal-token data is not redistributed. Turn on Demonstration mode to use the scanner with clearly labeled synthetic data.")
+        if settings.public_mode and not hosted_tradier_allowed:
+            st.error("Live Tradier options data is unavailable in the hosted edition pending explicit Tradier authorization. Turn on Demonstration mode to use the scanner with clearly labeled synthetic data.")
         else:
             st.error("Options scanning is unavailable because the server-side market-data connection is not configured. Demonstration mode remains available.")
     c1, c2, c3 = st.columns(3)

@@ -3,10 +3,10 @@
 OptionsELI is a local, dark-mode Streamlit research dashboard for market analysis,
 liquid-stock scanning, and put/call credit-spread evaluation. It never places orders.
 
-> **Public-data note:** Tradier documents non-Partner API use as personal-only and
-> prohibits redistribution to visitors without active Tradier accounts. Local/private
-> Tradier scanning remains supported. The anonymous public edition defaults to labeled
-> demonstration options data until Partner authorization is obtained.
+> **Cloud-data note:** Tradier documents non-Partner API use as personal-only, but
+> does not clearly authorize a personal token on a private single-user cloud host.
+> Local Tradier scanning remains supported. Cloud Tradier access stays disabled until
+> explicit written authorization is obtained.
 
 > **Risk warning:** Options can lose the full amount at risk. Credit spreads carry
 > early-assignment, expiration/pin, liquidity, gap, data-quality, and correlated-position
@@ -27,12 +27,12 @@ liquid-stock scanning, and put/call credit-spread evaluation. It never places or
 
 See `PLAN.md` for architecture, verification gates, and later phases.
 
-## Public deployment
+## Private cloud deployment
 
-OptionsELI includes a Streamlit Community Cloud public mode. It keeps the market and
-options research tools available while removing credential settings, the personal
-journal, and all SQLite access from the public UI. See `DEPLOY.md` for the complete
-GitHub, server-side secrets, testing, and anonymous-sharing checklist.
+OptionsELI includes an authenticated Streamlit Community Cloud entrypoint with OIDC
+email allowlisting before market-data code loads. Cloud mode removes credential
+settings, the personal journal, and SQLite access. See `DEPLOY.md` for the private
+sharing, Google OIDC, server-side secrets, testing, and Tradier permission checklist.
 
 ## Beginner-friendly Mac setup
 

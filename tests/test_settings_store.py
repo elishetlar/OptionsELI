@@ -16,7 +16,7 @@ def test_saved_env_is_private_and_ignored_location(tmp_path, monkeypatch):
 
     env_path = tmp_path / ".env"
     monkeypatch.setattr(settings_store, "ENV_PATH", env_path)
-    save_market_settings("secret", "account", "https://sandbox.tradier.com/v1", True)
+    settings_store.save_market_settings("secret", "account", "https://sandbox.tradier.com/v1", True)
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
     assert "TRADIER_API_TOKEN='secret'" in env_path.read_text()
     assert os.environ["TRADIER_API_TOKEN"] == "secret"
@@ -28,7 +28,7 @@ def test_settings_reload_saved_credentials_without_module_reload(tmp_path, monke
     env_path = tmp_path / ".env"
     monkeypatch.setattr(settings_store, "ENV_PATH", env_path)
     monkeypatch.setenv("TRADIER_API_TOKEN", "stale-token")
-    save_market_settings("new-token", "acct", "https://sandbox.tradier.com/v1", False)
+    settings_store.save_market_settings("new-token", "acct", "https://sandbox.tradier.com/v1", False)
     loaded = get_settings(env_path)
     assert loaded.tradier_token == "new-token"
     assert loaded.tradier_account_id == "acct"

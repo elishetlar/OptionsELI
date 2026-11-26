@@ -39,15 +39,20 @@ def test_public_entrypoint_executes_app_on_every_rerun(monkeypatch):
 
 
 def test_public_entrypoint_discards_stale_optionseli_modules(monkeypatch):
-    """Regression: a hot deployment must not reuse an older scoring module."""
+    """Regression: a hot deployment must not reuse older package modules."""
     import optionseli.market_data
 
     monkeypatch.setattr(optionseli.market_data, "yahoo_history", demo_prices)
-    stale = types.ModuleType("optionseli.strategy_scoring")
-    sys.modules["optionseli.strategy_scoring"] = stale
+    stale_scoring = types.ModuleType("optionseli.strategy_scoring")
+    stale_tradier = types.ModuleType("optionseli.tradier")
+    stale_tradier.TradierClient = object
+    stale_tradier.TradierError = RuntimeError
+    sys.modules["optionseli.strategy_scoring"] = stale_scoring
+    sys.modules["optionseli.tradier"] = stale_tradier
     app = AppTest.from_file(ENTRYPOINT, default_timeout=30).run()
     assert not app.exception
     assert hasattr(sys.modules["optionseli.strategy_scoring"], "score_candidate_with_context")
+    assert hasattr(sys.modules["optionseli.tradier"], "chain_data_is_stale")
 
 
 def test_public_demo_interactions_complete_without_crashing(monkeypatch):

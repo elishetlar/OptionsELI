@@ -15,8 +15,8 @@ from optionseli.diagnostics import log_event, log_failure
 from optionseli.indicators import calculate_indicators, latest_snapshot
 from optionseli.market_data import yahoo_history
 from optionseli.rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
-from optionseli.scoring import score_candidate_with_context
 from optionseli.signals import assess_market_regime, assess_trend, choose_strategy
+from optionseli.strategy_scoring import score_candidate_with_context
 from optionseli.settings_store import masked_token_hint, save_market_settings
 from optionseli.spreads import build_credit_spreads, payoff_at_expiration
 from optionseli.tradier import TradierClient, TradierError

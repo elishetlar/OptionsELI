@@ -1,4 +1,6 @@
 import ast
+import sys
+import types
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -32,6 +34,18 @@ def test_public_entrypoint_executes_app_on_every_rerun(monkeypatch):
         app.radio[0].set_value(page).run()
         assert not app.exception, (page, [item.message for item in app.exception])
         assert title in [item.value for item in app.title]
+
+
+def test_public_entrypoint_discards_stale_optionseli_modules(monkeypatch):
+    """Regression: a hot deployment must not reuse an older scoring module."""
+    import optionseli.market_data
+
+    monkeypatch.setattr(optionseli.market_data, "yahoo_history", demo_prices)
+    stale = types.ModuleType("optionseli.strategy_scoring")
+    sys.modules["optionseli.strategy_scoring"] = stale
+    app = AppTest.from_file(ENTRYPOINT, default_timeout=30).run()
+    assert not app.exception
+    assert hasattr(sys.modules["optionseli.strategy_scoring"], "score_candidate_with_context")
 
 
 def test_public_demo_interactions_complete_without_crashing(monkeypatch):

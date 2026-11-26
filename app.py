@@ -15,7 +15,8 @@ from optionseli.diagnostics import log_event, log_failure
 from optionseli.indicators import calculate_indicators, latest_snapshot
 from optionseli.market_data import yahoo_history
 from optionseli.rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
-from optionseli.scoring import score_candidate
+from optionseli.scoring import score_candidate_with_context
+from optionseli.signals import assess_market_regime, assess_trend, choose_strategy
 from optionseli.settings_store import masked_token_hint, save_market_settings
 from optionseli.spreads import build_credit_spreads, payoff_at_expiration
 from optionseli.tradier import TradierClient, TradierError
@@ -128,7 +129,13 @@ st.sidebar.title("OptionsELI")
 st.sidebar.caption("Market & options research")
 pages = available_pages(settings.public_mode)
 page = st.sidebar.radio("Workspace", pages)
-demo = st.sidebar.toggle("Demonstration mode", value=settings.demo_mode, help="Uses clearly labeled synthetic prices and option chains.")
+public_demo_required = settings.public_mode and not settings.public_tradier_authorized
+demo = st.sidebar.toggle(
+    "Demonstration mode",
+    value=True if public_demo_required else settings.demo_mode,
+    disabled=public_demo_required,
+    help="Required in the public edition until Tradier grants Partner/data-redistribution authorization." if public_demo_required else "Uses clearly labeled synthetic prices and option chains.",
+)
 log_event("page_render", page=page, public_mode=settings.public_mode, demo_mode=demo)
 if demo:
     st.markdown("<div class='demo-banner'>DEMONSTRATION MODE — all displayed prices and option contracts are synthetic and must not be used for trading.</div>", unsafe_allow_html=True)
@@ -138,6 +145,8 @@ if settings.public_mode:
 
 if demo:
     data_badge("DEMONSTRATION", "demo", "Synthetic prices and chains; no market connection is being used.")
+elif settings.public_mode and not settings.public_tradier_authorized:
+    data_badge("PUBLIC TRADIER DATA DISABLED", "offline", "Tradier personal API data cannot be redistributed. Demonstration mode remains available pending Partner authorization.")
 elif not settings.tradier_token:
     data_badge("MARKET DATA NOT CONFIGURED", "offline", "Tradier token missing. Stock pages may use delayed Yahoo data; options scanning is unavailable.")
 elif "sandbox" in settings.tradier_base_url:
@@ -198,16 +207,20 @@ elif page == "Stock Scanner":
 
 elif page == "Options Scanner":
     st.title("Options Credit Spread Scanner")
-    st.caption("Same-expiration verticals from actual Tradier chains in API mode. The engine may return no qualifying trades.")
-    scan_available = options_scan_available(demo, bool(settings.tradier_token))
+    st.caption("Automatic mode evaluates both directions, market regime, technical placement, liquidity and risk/reward. A scan may correctly return No Trade.")
+    public_tradier_allowed = not settings.public_mode or settings.public_tradier_authorized
+    scan_available = options_scan_available(demo, bool(settings.tradier_token), public_tradier_allowed)
     if not scan_available:
-        st.error("Options scanning is temporarily unavailable because the server-side market-data connection is not configured. Demonstration mode remains available.")
+        if settings.public_mode and not settings.public_tradier_authorized:
+            st.error("Live Tradier options data is unavailable in the public edition pending Tradier Partner authorization. Personal-token data is not redistributed. Turn on Demonstration mode to use the scanner with clearly labeled synthetic data.")
+        else:
+            st.error("Options scanning is unavailable because the server-side market-data connection is not configured. Demonstration mode remains available.")
     c1, c2, c3 = st.columns(3)
     if settings.public_mode:
         symbol = c1.selectbox("Underlying", LIQUID_UNIVERSE, index=0)
     else:
         symbol = c1.text_input("Underlying", "SPY").upper().strip()
-    strategy = c2.selectbox("Strategy", ["Put credit spread", "Call credit spread"])
+    strategy = c2.selectbox("Strategy", ["Automatic — evaluate both", "Put credit spread", "Call credit spread"])
     dte = c3.slider("Days to expiration", 1, 90, (DEFAULTS["dte_min"], DEFAULTS["dte_max"]))
     c1, c2, c3, c4 = st.columns(4)
     delta_range = c1.slider("Absolute short delta", 0.01, 0.50, (DEFAULTS["delta_min"], DEFAULTS["delta_max"]), .01)
@@ -219,16 +232,25 @@ elif page == "Options Scanner":
     max_ba = c2.number_input("Max leg bid-ask", .01, 5.0, DEFAULTS["max_bid_ask"], .05)
     min_oi = c3.number_input("Minimum leg open interest", 0, 100000, DEFAULTS["min_open_interest"], 25)
     fees = c4.number_input("Round-trip costs / spread", 0.0, 50.0, DEFAULTS["transaction_cost"], .10)
-    exclude_earnings = st.checkbox("Exclude upcoming earnings", True, help="In v1 this requires verified earnings data; scans are blocked for individual stocks when enabled and no calendar is configured.")
+    min_ror = st.slider("Minimum return on risk (%)", 0.0, 50.0, 5.0, 0.5)
+    st.info("Earnings and major economic events: unavailable — no verified event provider is configured. Event dates are not inferred and are not used in ranking.")
     if st.button("Scan option chains", type="primary", disabled=not scan_available):
         if not width:
             st.error("Select at least one spread width.")
-        elif exclude_earnings and symbol not in {"SPY", "QQQ", "IWM", "DIA", "GLD", "TLT"}:
-            st.warning("No verified earnings date is configured for this stock. Disable the earnings exclusion to proceed, or add a calendar source in Phase 2.")
         else:
             try:
                 price_df, price_meta = get_prices(symbol, demo)
                 spot = float(price_df.Close.iloc[-1])
+                regime_data = {}
+                for regime_symbol in ("SPY", "QQQ", "VIX"):
+                    regime_data[regime_symbol] = get_prices(regime_symbol, demo)
+                underlying_signal = assess_trend(price_df, price_meta)
+                spy_signal = assess_trend(*regime_data["SPY"])
+                qqq_signal = assess_trend(*regime_data["QQQ"])
+                market_regime = assess_market_regime(
+                    spy_signal, qqq_signal, regime_data["VIX"][0], regime_data["VIX"][1]
+                )
+                decision = choose_strategy(underlying_signal, market_regime)
                 if demo:
                     chain, chain_meta = demo_option_chain(symbol, spot)
                 else:
@@ -242,32 +264,73 @@ elif page == "Options Scanner":
                         frames.append(frame); metas.append(chain_meta)
                     chain = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
                     chain_meta = metas[-1] if metas else None
-                key = "put_credit" if strategy.startswith("Put") else "call_credit"
-                candidates = build_credit_spreads(chain, symbol, key, delta_range[0], delta_range[1], target_credit, credit_tolerance, loss_range[0], loss_range[1], tuple(width), max_ba, int(min_oi), fees)
                 snapshot = latest_snapshot(price_df)
-                ranked = sorted((score_candidate(c, snapshot) for c in candidates), key=lambda x: x.score, reverse=True)
-                if not ranked:
-                    st.info("No trades qualify under the current filters. This is a valid scan result.")
-                else:
-                    table = pd.DataFrame([{"Score": c.score, "Expiration": c.expiration, "Short": c.short_strike, "Long": c.long_strike, "Mid credit": c.midpoint_credit, "Conservative credit": c.conservative_credit, "Max profit": c.max_profit, "Max loss": c.max_loss, "Breakeven": c.breakeven, "Return on risk %": c.return_on_risk, "|Delta|": abs(c.short_delta or 0), "OI": c.open_interest} for c in ranked])
+                directions = ["put_credit", "call_credit"] if strategy.startswith("Automatic") else (["put_credit"] if strategy.startswith("Put") else ["call_credit"])
+                rankings = {}
+                for key in directions:
+                    candidates = build_credit_spreads(chain, symbol, key, delta_range[0], delta_range[1], target_credit, credit_tolerance, loss_range[0], loss_range[1], tuple(width), max_ba, int(min_oi), fees)
+                    scored = (score_candidate_with_context(c, snapshot, underlying_signal, market_regime) for c in candidates)
+                    rankings[key] = [] if (underlying_signal.stale or market_regime.stale) else sorted(
+                        (c for c in scored if c.return_on_risk >= min_ror), key=lambda x: x.score, reverse=True
+                    )
+
+                signal_cols = st.columns(4)
+                signal_cols[0].metric("Trend classification", underlying_signal.classification)
+                signal_cols[1].metric("Bullish signal", f"{underlying_signal.bullish_score:.1f}/100")
+                signal_cols[2].metric("Bearish signal", f"{underlying_signal.bearish_score:.1f}/100")
+                signal_cols[3].metric("Market regime", market_regime.classification)
+                st.warning("Signal and trade scores are transparent heuristics, not calibrated probabilities, expected returns, or recommendations.")
+                with st.expander("Why the signal and regime received these classifications"):
+                    st.write(list(underlying_signal.components))
+                    if underlying_signal.unavailable:
+                        st.write("Unavailable inputs", list(underlying_signal.unavailable))
+                    st.write("Market regime", list(market_regime.explanations))
+
+                if strategy.startswith("Automatic"):
+                    if decision.preferred_strategy is None:
+                        st.error("NO TRADE — " + " ".join(decision.reasons))
+                    elif not rankings.get(decision.preferred_strategy):
+                        st.error(f"NO TRADE — {decision.classification} was directionally preferred, but no spread passed liquidity, pricing, maximum-loss and return-on-risk filters.")
+                    else:
+                        st.success(f"Automatic selection: {decision.classification}. " + " ".join(decision.reasons))
+
+                all_ranked = []
+                for key, heading in (("put_credit", "Put credit spread ranking"), ("call_credit", "Call credit spread ranking")):
+                    if key not in rankings:
+                        continue
+                    st.subheader(heading)
+                    ranked = rankings[key]
+                    if not ranked:
+                        st.info("No qualifying spreads in this direction. This is a valid result.")
+                        continue
+                    all_ranked.extend(ranked)
+                    table = pd.DataFrame([{
+                        "Score": c.score, "Expiration": c.expiration, "Short": c.short_strike, "Long": c.long_strike,
+                        "Mid credit": c.midpoint_credit, "Conservative credit": c.conservative_credit,
+                        "Max profit": c.max_profit, "Max loss": c.max_loss, "Breakeven": c.breakeven,
+                        "Return on risk %": c.return_on_risk, "Combined bid-ask": c.bid_ask_width,
+                        "|Delta|": abs(c.short_delta or 0), "OI": c.open_interest,
+                        "Transaction costs": c.transaction_cost,
+                        f"Distance beyond {c.technical_level}": c.technical_distance,
+                        "Distance (ATR)": c.technical_distance_atr,
+                    } for c in ranked])
                     st.dataframe(table, width="stretch", hide_index=True)
-                    labels = [f"#{i+1} {c.expiration} · {c.short_strike}/{c.long_strike} · score {c.score}" for i, c in enumerate(ranked)]
-                    chosen = ranked[labels.index(st.selectbox("Inspect candidate", labels))]
-                    st.subheader("Trade analysis")
-                    st.warning("The score is a configurable heuristic, not a probability of profit or investment recommendation.")
-                    left, right = st.columns([1, 1.4])
-                    with left:
-                        st.write("Score components", chosen.score_details)
-                        st.write("Reasons to consider", list(chosen.reasons))
-                        st.write("Risks", list(chosen.risks))
-                        st.write("Invalidation", chosen.invalidation)
-                        st.caption("Maximum-profit/loss figures use midpoint credit and include configured transaction costs. The chart excludes fees.")
+                    for index, candidate in enumerate(ranked[:3]):
+                        with st.expander(f"#{index + 1}: {candidate.expiration} · {candidate.short_strike}/{candidate.long_strike} · score {candidate.score}"):
+                            st.write("Why selected", list(candidate.reasons))
+                            st.write("Main risks", list(candidate.risks))
+                            st.write("Invalidation", candidate.invalidation)
+                            st.write("Score components", candidate.score_details)
+
+                if all_ranked:
+                    labels = [f"{c.strategy} · {c.expiration} · {c.short_strike}/{c.long_strike} · {c.score}" for c in all_ranked]
+                    chosen = all_ranked[labels.index(st.selectbox("Expiration payoff chart", labels))]
                     prices = np.linspace(chosen.long_strike - chosen.width, chosen.short_strike + chosen.width, 180)
                     payoff = payoff_at_expiration(chosen, prices)
                     fig = go.Figure(go.Scatter(x=prices, y=payoff, fill="tozeroy", line={"color": "#43d9ad"}))
                     fig.add_vline(x=chosen.breakeven, line_dash="dash", annotation_text="Breakeven")
-                    fig.update_layout(template="plotly_dark", paper_bgcolor="#0b111b", plot_bgcolor="#0b111b", font={"color":"#dfe7f1"}, xaxis_title="Underlying at expiration", yaxis_title="P/L per spread ($)", height=390, xaxis={"gridcolor":"#202b3a"}, yaxis={"gridcolor":"#202b3a"})
-                    right.plotly_chart(fig, width="stretch")
+                    fig.update_layout(template="plotly_dark", paper_bgcolor="#0b111b", plot_bgcolor="#0b111b", font={"color":"#dfe7f1"}, xaxis_title="Underlying at expiration", yaxis_title="P/L per spread ($, before transaction costs)", height=390, xaxis={"gridcolor":"#202b3a"}, yaxis={"gridcolor":"#202b3a"})
+                    st.plotly_chart(fig, width="stretch")
                 source_line(price_meta)
                 if chain_meta: source_line(chain_meta)
                 if chain.get("delta", pd.Series(dtype=float)).isna().any():

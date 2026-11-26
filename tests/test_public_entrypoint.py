@@ -4,11 +4,14 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 from optionseli.config import Settings
+from optionseli.demo_data import demo_prices
 
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
 
-def test_public_entrypoint_executes_app_on_every_rerun():
+def test_public_entrypoint_executes_app_on_every_rerun(monkeypatch):
+    import optionseli.market_data
+    monkeypatch.setattr(optionseli.market_data, "yahoo_history", demo_prices)
     source = ENTRYPOINT.read_text()
     assert "runpy.run_path" in source
     tree = ast.parse(source)
@@ -16,8 +19,8 @@ def test_public_entrypoint_executes_app_on_every_rerun():
 
     app = AppTest.from_file(ENTRYPOINT, default_timeout=30).run()
     assert not app.exception
-    app.toggle[0].set_value(True).run()
-    assert not app.exception
+    assert app.toggle[0].value is True
+    assert app.toggle[0].disabled is True
 
     expected_titles = {
         "Market Overview": "Market Overview",
@@ -31,9 +34,11 @@ def test_public_entrypoint_executes_app_on_every_rerun():
         assert title in [item.value for item in app.title]
 
 
-def test_public_demo_interactions_complete_without_crashing():
+def test_public_demo_interactions_complete_without_crashing(monkeypatch):
+    import optionseli.market_data
+    monkeypatch.setattr(optionseli.market_data, "yahoo_history", demo_prices)
     app = AppTest.from_file(ENTRYPOINT, default_timeout=30).run()
-    app.toggle[0].set_value(True).run()
+    assert app.toggle[0].value is True
 
     app.radio[0].set_value("Stock Scanner").run()
     next(button for button in app.button if button.label == "Run stock scan").click().run()
@@ -51,6 +56,9 @@ def test_public_demo_interactions_complete_without_crashing():
 
 def test_every_public_page_renders_without_tradier_token(monkeypatch):
     import optionseli.config
+    import optionseli.market_data
+
+    monkeypatch.setattr(optionseli.market_data, "yahoo_history", demo_prices)
 
     no_token = Settings(tradier_token="", public_mode=True, demo_mode=False)
     monkeypatch.setattr(optionseli.config, "get_settings", lambda *args, **kwargs: no_token)
@@ -63,4 +71,6 @@ def test_every_public_page_renders_without_tradier_token(monkeypatch):
 
     app.radio[0].set_value("Options Scanner").run()
     scan_button = next(button for button in app.button if button.label == "Scan option chains")
-    assert scan_button.disabled is True
+    assert scan_button.disabled is False
+    assert app.toggle[0].value is True
+    assert app.toggle[0].disabled is True

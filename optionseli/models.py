@@ -38,3 +38,8 @@ class SpreadCandidate:
     reasons: tuple[str, ...] = ()
     risks: tuple[str, ...] = ()
     invalidation: str = ""
+    bid_ask_width: float = 0.0
+    transaction_cost: float = 0.0
+    technical_distance: float | None = None
+    technical_distance_atr: float | None = None
+    technical_level: str = ""

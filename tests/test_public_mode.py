@@ -47,3 +47,5 @@ def test_options_scanner_availability_without_credentials():
     assert options_scan_available(False, False) is False
     assert options_scan_available(True, False) is True
     assert options_scan_available(False, True) is True
+    assert options_scan_available(False, True, public_tradier_allowed=False) is False
+    assert options_scan_available(True, True, public_tradier_allowed=False) is True

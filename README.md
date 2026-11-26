@@ -3,6 +3,11 @@
 OptionsELI is a local, dark-mode Streamlit research dashboard for market analysis,
 liquid-stock scanning, and put/call credit-spread evaluation. It never places orders.
 
+> **Public-data note:** Tradier documents non-Partner API use as personal-only and
+> prohibits redistribution to visitors without active Tradier accounts. Local/private
+> Tradier scanning remains supported. The anonymous public edition defaults to labeled
+> demonstration options data until Partner authorization is obtained.
+
 > **Risk warning:** Options can lose the full amount at risk. Credit spreads carry
 > early-assignment, expiration/pin, liquidity, gap, data-quality, and correlated-position
 > risks. Scores in this application are transparent heuristics—not probabilities of
@@ -13,7 +18,8 @@ liquid-stock scanning, and put/call credit-spread evaluation. It never places or
 - Market overview for SPY, QQQ, IWM, and VIX
 - A configurable 50-symbol scanner and core technical indicators
 - Official Tradier read-only option-chain access (sandbox-first)
-- Put and call credit-spread construction with matching expirations
+- Automatic or manual put/call credit-spread construction with matching expirations
+- Bullish/bearish signal scoring, SPY/QQQ/VIX regime filtering, and No Trade outcomes
 - Adjustable risk, delta, credit, width, liquidity, and cost filters
 - Midpoint and conservative execution estimates, payoff chart, and explainable score
 - SQLite trade journal and honest underlying-signal testing scaffold

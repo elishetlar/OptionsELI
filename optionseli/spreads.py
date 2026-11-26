@@ -70,6 +70,8 @@ def build_credit_spreads(
                     midpoint_credit=round(midpoint, 2), conservative_credit=round(conservative, 2),
                     max_profit=round(max_profit, 2), max_loss=round(max_loss, 2), breakeven=round(breakeven, 2),
                     return_on_risk=round(max_profit / max_loss * 100, 2),
+                    bid_ask_width=round((float(short["ask"]) - float(short["bid"])) + (float(long["ask"]) - float(long["bid"])), 2),
+                    transaction_cost=round(transaction_cost, 2),
                 ))
     return results
 

@@ -12,5 +12,5 @@ def available_pages(public_mode: bool) -> list[str]:
     return pages
 
 
-def options_scan_available(demo_mode: bool, tradier_configured: bool) -> bool:
-    return demo_mode or tradier_configured
+def options_scan_available(demo_mode: bool, tradier_configured: bool, public_tradier_allowed: bool = True) -> bool:
+    return demo_mode or (tradier_configured and public_tradier_allowed)

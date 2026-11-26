@@ -12,6 +12,8 @@ When `OPTIONSELI_PUBLIC_MODE = true` is set in Streamlit secrets:
 - SQLite is not opened by the web app.
 - Visitors cannot view, enter, test, or change Tradier credentials or server settings.
 - The options client remains read-only and exposes no brokerage/order endpoints.
+- Public Tradier display is disabled by default because personal API data cannot be
+  redistributed. The options scanner remains available with labeled demonstration data.
 - Tradier expiration responses are cached for 15 minutes and chains for 5 minutes.
 - Shared upstream cache misses are rate-limited and each scan checks at most four expirations.
 
@@ -75,19 +77,22 @@ real `secrets.toml`.
    `streamlit_app.py`. This dedicated entrypoint forces public read-only mode even if
    the public-mode secret is accidentally omitted. Do not deploy `app.py` directly.
 4. Open **Advanced settings** and select Python **3.12**.
-5. In **Secrets**, enter the following, replacing only the token value:
+5. In **Secrets**, use this public-safe configuration. Do not add a personal Tradier
+   token for anonymous redistribution:
 
    ```toml
-   TRADIER_API_TOKEN = "YOUR_TRADIER_MARKET_DATA_TOKEN"
-   TRADIER_BASE_URL = "https://sandbox.tradier.com/v1"
    OPTIONSELI_PUBLIC_MODE = true
-   OPTIONSELI_DEMO_MODE = false
+   OPTIONSELI_DEMO_MODE = true
+   OPTIONSELI_PUBLIC_TRADIER_AUTHORIZED = false
    OPTIONSELI_API_CALLS_PER_MINUTE = 50
    OPTIONSELI_MAX_EXPIRATIONS_PER_SCAN = 4
    ```
 
-   Do not add `TRADIER_ACCOUNT_ID`; public market-data features do not need it. Do
-   not paste the whole local `.env` file.
+   Do not add `TRADIER_API_TOKEN` or `TRADIER_ACCOUNT_ID`, and do not paste the local
+   `.env` file. Tradier says non-Partner API access is personal-only and market data
+   cannot be redistributed to people without active Tradier accounts. If Tradier
+   later grants the required Partner/data-display authorization, follow its OAuth
+   and display requirements before setting `OPTIONSELI_PUBLIC_TRADIER_AUTHORIZED = true`.
 6. Save the advanced settings and deploy.
 
 Streamlit documents that Community Cloud reads dependencies from the repository,
@@ -104,15 +109,16 @@ an account or password. Verify this in a private/incognito browser window.
 
 - Market Overview loads and labels Yahoo data as delayed/cached where applicable.
 - Stock Scanner works for the predefined liquid universe.
-- Options Scanner displays `TRADIER SANDBOX · DELAYED` and retrieves chains.
+- Options Scanner displays demonstration labels and evaluates both spread directions.
+- Public Tradier data stays blocked unless Partner authorization is explicitly enabled.
 - Missing Greeks are explicitly reported and excluded.
 - Settings and Trade Journal do not appear anywhere in navigation.
 - Repeated scans return cached results or a friendly rate-limit message.
 - No token, account ID, `.env` contents, or authorization headers appear in the UI or logs.
 - No order-entry or brokerage execution control exists.
 
-If the app reports a missing token, edit the app's **Settings → Secrets**, not the
-public UI. After changing secrets, reboot the app from Streamlit Community Cloud.
+Do not enable public Tradier display merely because a token works. Partner/data-use
+authorization is a separate requirement.
 
 ## 7. Updating the site
 

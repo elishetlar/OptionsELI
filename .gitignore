@@ -4,6 +4,8 @@
 .streamlit/secrets.toml
 .venv/
 .venv.broken-*/
+.test-venv/
+.test-python/
 .python/
 .python-cache/
 .tools/

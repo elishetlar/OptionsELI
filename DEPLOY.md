@@ -9,24 +9,15 @@ or virtual environments.
 
 ## Tradier permission gate
 
-Tradier's published documentation says non-Partner API access is for personal use
-and that market data cannot be redistributed to people without active Tradier
-accounts. It does not clearly state whether a personal token may be used from a
-private, single-user cloud host. Authentication alone does not decide data licensing.
-
-Until Tradier provides explicit written approval for this exact use case, keep:
+The owner has received Tradier confirmation authorizing the personal production API
+token in this private, single-user deployment. That permission does **not** authorize
+public redistribution. Keep Streamlit private sharing enabled and keep:
 
 ```toml
 OPTIONSELI_PUBLIC_TRADIER_AUTHORIZED = false
-OPTIONSELI_PRIVATE_CLOUD_TRADIER_AUTHORIZED = false
-OPTIONSELI_DEMO_MODE = true
+OPTIONSELI_PRIVATE_CLOUD_TRADIER_AUTHORIZED = true
+OPTIONSELI_DEMO_MODE = false
 ```
-
-Ask Tradier support whether an active account holder may use a personal API token in
-a private Streamlit Community Cloud application accessible only by that same account
-holder. Ask whether production and sandbox quote/option-chain display are both
-permitted and whether Partner/OAuth status or a separate market-data license is
-required. Do not enable the private-cloud flag without an affirmative written answer.
 
 ## 1. Configure Streamlit server-side Secrets
 
@@ -34,24 +25,19 @@ Open the app in Streamlit Community Cloud, select **Manage app → Settings → 
 and enter the following with your real private values:
 
 ```toml
-OPTIONSELI_DEMO_MODE = true
+TRADIER_API_TOKEN = "PASTE_THE_PRODUCTION_TOKEN_IN_CLOUD_SECRETS_ONLY"
+TRADIER_BASE_URL = "https://api.tradier.com/v1"
+OPTIONSELI_DEMO_MODE = false
 OPTIONSELI_API_CALLS_PER_MINUTE = 50
 OPTIONSELI_MAX_EXPIRATIONS_PER_SCAN = 4
 OPTIONSELI_PUBLIC_TRADIER_AUTHORIZED = false
-OPTIONSELI_PRIVATE_CLOUD_TRADIER_AUTHORIZED = false
-```
-
-Do not add a Tradier token to the cloud yet. After receiving explicit Tradier
-authorization, add these server-side values without committing them:
-
-```toml
-TRADIER_API_TOKEN = "YOUR_AUTHORIZED_TOKEN"
-TRADIER_BASE_URL = "https://sandbox.tradier.com/v1"
-OPTIONSELI_DEMO_MODE = false
 OPTIONSELI_PRIVATE_CLOUD_TRADIER_AUTHORIZED = true
 ```
 
-`OPTIONSELI_PUBLIC_TRADIER_AUTHORIZED` must remain `false`.
+Replace the quoted token marker inside the Cloud Secrets editor with the real
+production token. Never put it in a repository file. The application reads no
+account ID and has no order endpoint. `OPTIONSELI_PUBLIC_TRADIER_AUTHORIZED` must
+remain `false`.
 
 The application does not require `[auth]`, Google OAuth client credentials, a cookie
 secret, or `OPTIONSELI_ALLOWED_EMAILS`. Those obsolete values may be removed from
@@ -82,7 +68,8 @@ After deployment verify:
 - An incognito visitor cannot reach the Streamlit app without Cloud sign-in.
 - An account that is not in the Streamlit viewer list cannot open OptionsELI.
 - No dashboard content is served to an unauthenticated visitor.
-- The authorized identity sees the demonstration banner while Tradier permission is pending.
+- The authorized identity sees `TRADIER PRODUCTION`, provider timestamps, and no demonstration banner.
+- A failed or stale Tradier request produces unavailable/No Trade output and never synthetic fallback.
 - Settings, credentials, journal, and SQLite data are absent from the cloud UI.
 - There is no order-entry or brokerage execution functionality.
 

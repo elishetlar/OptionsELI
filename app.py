@@ -19,7 +19,7 @@ from optionseli.signals import assess_market_regime, assess_trend, choose_strate
 from optionseli.strategy_scoring import score_candidate_with_context
 from optionseli.settings_store import masked_token_hint, save_market_settings
 from optionseli.spreads import build_credit_spreads, payoff_at_expiration
-from optionseli.tradier import TradierClient, TradierError
+from optionseli.tradier import TradierClient, TradierError, chain_data_is_stale
 from optionseli.ui_policy import available_pages, options_scan_available
 
 st.set_page_config(page_title="OptionsELI", page_icon="📈", layout="wide")
@@ -86,14 +86,30 @@ def source_line(meta) -> None:
     elif meta.is_delayed:
         state, kind = "DELAYED DATA", "delayed"
     else:
-        state, kind = "REAL-TIME / PROVIDER ENTITLEMENT", "live"
-    note = f"Source: {meta.source} · Retrieved: {meta.retrieved_at} · {meta.note}"
+        state, kind = "PROVIDER DATA · VERIFY TIMESTAMP", "live"
+    observed = f" · Latest observation: {meta.observed_at}" if getattr(meta, "observed_at", "") else ""
+    note = f"Source: {meta.source} · Retrieved: {meta.retrieved_at}{observed} · {meta.note}"
     data_badge(state, kind, note)
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_prices(symbol: str, demo: bool):
-    return demo_prices(symbol) if demo else yahoo_history(symbol)
+    if demo:
+        return demo_prices(symbol)
+    if settings.tradier_token:
+        end = date.today()
+        start = end - timedelta(days=430)
+        get_api_limiter(settings.api_calls_per_minute).acquire()
+        return TradierClient(settings.tradier_token, settings.tradier_base_url).history(symbol, start, end)
+    if settings.public_mode:
+        raise TradierError("Hosted Tradier credentials are unavailable; live market data is disabled")
+    return yahoo_history(symbol)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_tradier_quote(symbol: str):
+    get_api_limiter(settings.api_calls_per_minute).acquire()
+    return TradierClient(settings.tradier_token, settings.tradier_base_url).quote(symbol)
 
 
 @st.cache_resource
@@ -112,7 +128,10 @@ def get_tradier_chain(symbol: str, expiration_iso: str):
     get_api_limiter(settings.api_calls_per_minute).acquire()
     client = TradierClient(settings.tradier_token, settings.tradier_base_url)
     chain, meta = client.option_chain(symbol, date.fromisoformat(expiration_iso))
-    meta = type(meta)(meta.source, meta.retrieved_at, meta.is_synthetic, meta.is_delayed, f"{meta.note} Cached for up to 5 minutes.")
+    meta = type(meta)(
+        meta.source, meta.retrieved_at, meta.is_synthetic, meta.is_delayed,
+        f"{meta.note} Cached for up to 5 minutes.", meta.observed_at,
+    )
     return chain, meta
 
 
@@ -123,6 +142,53 @@ def chart_prices(df: pd.DataFrame, symbol: str):
         fig.add_trace(go.Scatter(x=enriched.index, y=enriched[col], name=col.replace("_", " "), line={"width": 1.4, "color": color}))
     fig.update_layout(template="plotly_dark", paper_bgcolor="#0b111b", plot_bgcolor="#0b111b", font={"color":"#dfe7f1"}, height=470, margin=dict(l=10, r=10, t=35, b=10), xaxis_rangeslider_visible=False, xaxis={"gridcolor":"#202b3a"}, yaxis={"gridcolor":"#202b3a"})
     return fig
+
+
+def analyze_credit_spread_symbol(
+    symbol, demo, dte, directions, delta_range, target_credit, credit_tolerance,
+    loss_range, widths, max_ba, min_oi, fees, min_ror, market_regime,
+):
+    """Fetch and rank one symbol without substituting demo data after a live failure."""
+    price_df, price_meta = get_prices(symbol, demo)
+    if demo:
+        spot = float(price_df.Close.iloc[-1])
+        chain, chain_meta = demo_option_chain(symbol, spot)
+    else:
+        quote = get_tradier_quote(symbol)
+        if quote.get("latest") is None:
+            raise TradierError(f"Tradier returned no usable current price for {symbol}")
+        spot = float(quote["latest"])
+        expirations = get_tradier_expirations(symbol)
+        eligible = [x for x in expirations if dte[0] <= (x - date.today()).days <= dte[1]][:settings.max_expirations_per_scan]
+        frames, metas = [], []
+        for expiration in eligible:
+            frame, meta = get_tradier_chain(symbol, expiration.isoformat())
+            frames.append(frame); metas.append(meta)
+        chain = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        chain_meta = metas[-1] if metas else None
+        if chain.empty:
+            raise TradierError(f"No Tradier option chains were available for {symbol} in the selected DTE range")
+        if chain_data_is_stale(chain):
+            raise TradierError(f"{symbol} option quotes are stale or lack verifiable timestamps; No Trade")
+
+    snapshot = latest_snapshot(price_df)
+    signal = assess_trend(price_df, price_meta)
+    decision = choose_strategy(signal, market_regime)
+    rankings = {}
+    for key in directions:
+        candidates = build_credit_spreads(
+            chain, symbol, key, delta_range[0], delta_range[1], target_credit,
+            credit_tolerance, loss_range[0], loss_range[1], tuple(widths),
+            max_ba, int(min_oi), fees,
+        )
+        scored = (score_candidate_with_context(c, snapshot, signal, market_regime) for c in candidates)
+        rankings[key] = [] if (signal.stale or market_regime.stale) else sorted(
+            (c for c in scored if c.return_on_risk >= min_ror), key=lambda x: x.score, reverse=True
+        )
+    return {
+        "symbol": symbol, "spot": spot, "price_meta": price_meta, "chain_meta": chain_meta,
+        "chain": chain, "signal": signal, "decision": decision, "rankings": rankings,
+    }
 
 
 st.sidebar.title("OptionsELI")
@@ -167,8 +233,17 @@ if page == "Market Overview":
             df, meta = get_prices(symbol, demo)
             datasets[symbol] = (df, meta)
             snap = latest_snapshot(df)
-            previous = float(df.Close.iloc[-2])
-            column.metric(symbol, f"{snap['Price']:.2f}", f"{(snap['Price']/previous-1)*100:.2f}%")
+            if not demo and settings.tradier_token:
+                quote = get_tradier_quote(symbol)
+                current_price = float(quote["latest"]) if quote.get("latest") is not None else float(snap["Price"])
+                change_pct = quote.get("change_percentage")
+                if change_pct is None and quote.get("prevclose"):
+                    change_pct = (current_price / float(quote["prevclose"]) - 1) * 100
+            else:
+                current_price = float(snap["Price"])
+                previous = float(df.Close.iloc[-2])
+                change_pct = (current_price / previous - 1) * 100
+            column.metric(symbol, f"{current_price:.2f}", f"{float(change_pct):.2f}%" if change_pct is not None else "Unavailable")
             column.caption(f"{snap['Trend']} · RSI {snap['RSI']:.1f}")
         except Exception as exc:
             log_failure("market_overview_symbol_failed", exc, symbol=symbol)
@@ -177,6 +252,19 @@ if page == "Market Overview":
     if selected:
         st.plotly_chart(chart_prices(datasets[selected][0], selected), width="stretch")
         source_line(datasets[selected][1])
+        selected_snapshot = latest_snapshot(datasets[selected][0])
+        indicator_columns = st.columns(5)
+        indicator_columns[0].metric("RSI (14)", f"{selected_snapshot['RSI']:.1f}")
+        indicator_columns[1].metric("MACD", f"{selected_snapshot['MACD']:.2f}")
+        indicator_columns[2].metric("ATR (14)", f"{selected_snapshot['ATR']:.2f}")
+        indicator_columns[3].metric("Support", f"${selected_snapshot['Support']:.2f}")
+        indicator_columns[4].metric("Resistance", f"${selected_snapshot['Resistance']:.2f}")
+        if all(item in datasets for item in ("SPY", "QQQ", "VIX")):
+            spy_signal = assess_trend(*datasets["SPY"])
+            qqq_signal = assess_trend(*datasets["QQQ"])
+            regime = assess_market_regime(spy_signal, qqq_signal, *datasets["VIX"])
+            st.subheader(f"Market regime: {regime.classification}")
+            st.write(list(regime.explanations))
     else:
         st.warning("Market history is temporarily unavailable. Try again later or use Demonstration mode.")
     st.subheader("Economic events")
@@ -196,7 +284,13 @@ elif page == "Stock Scanner":
         for i, symbol in enumerate(selected):
             try:
                 df, last_meta = get_prices(symbol, demo)
-                rows.append({"Symbol": symbol, **latest_snapshot(df)})
+                row = {"Symbol": symbol, **latest_snapshot(df)}
+                if not demo and settings.tradier_token:
+                    quote = get_tradier_quote(symbol)
+                    if quote.get("latest") is not None:
+                        row["Price"] = float(quote["latest"])
+                    row["Daily change %"] = quote.get("change_percentage")
+                rows.append(row)
             except Exception as exc:
                 log_failure("stock_scan_symbol_failed", exc, symbol=symbol)
                 failures.append(f"{symbol}: {exc}")
@@ -220,9 +314,10 @@ elif page == "Options Scanner":
             st.error("Options scanning is unavailable because the server-side market-data connection is not configured. Demonstration mode remains available.")
     c1, c2, c3 = st.columns(3)
     if settings.public_mode:
-        symbol = c1.selectbox("Underlying", LIQUID_UNIVERSE, index=0)
+        symbols = c1.multiselect("Underlyings (up to 5)", LIQUID_UNIVERSE, default=["SPY"], max_selections=5)
     else:
-        symbol = c1.text_input("Underlying", "SPY").upper().strip()
+        raw_symbols = c1.text_input("Underlyings (comma separated)", "SPY")
+        symbols = list(dict.fromkeys(item.strip().upper() for item in raw_symbols.split(",") if item.strip()))[:5]
     strategy = c2.selectbox("Strategy", ["Automatic — evaluate both", "Put credit spread", "Call credit spread"])
     dte = c3.slider("Days to expiration", 1, 90, (DEFAULTS["dte_min"], DEFAULTS["dte_max"]))
     c1, c2, c3, c4 = st.columns(4)
@@ -238,111 +333,93 @@ elif page == "Options Scanner":
     min_ror = st.slider("Minimum return on risk (%)", 0.0, 50.0, 5.0, 0.5)
     st.info("Earnings and major economic events: unavailable — no verified event provider is configured. Event dates are not inferred and are not used in ranking.")
     if st.button("Scan option chains", type="primary", disabled=not scan_available):
-        if not width:
+        if not symbols:
+            st.error("Select at least one underlying.")
+        elif not width:
             st.error("Select at least one spread width.")
         else:
             try:
-                price_df, price_meta = get_prices(symbol, demo)
-                spot = float(price_df.Close.iloc[-1])
-                regime_data = {}
-                for regime_symbol in ("SPY", "QQQ", "VIX"):
-                    regime_data[regime_symbol] = get_prices(regime_symbol, demo)
-                underlying_signal = assess_trend(price_df, price_meta)
+                regime_data = {item: get_prices(item, demo) for item in ("SPY", "QQQ", "VIX")}
                 spy_signal = assess_trend(*regime_data["SPY"])
                 qqq_signal = assess_trend(*regime_data["QQQ"])
                 market_regime = assess_market_regime(
                     spy_signal, qqq_signal, regime_data["VIX"][0], regime_data["VIX"][1]
                 )
-                decision = choose_strategy(underlying_signal, market_regime)
-                if demo:
-                    chain, chain_meta = demo_option_chain(symbol, spot)
-                else:
-                    expirations = get_tradier_expirations(symbol)
-                    eligible = [x for x in expirations if dte[0] <= (x - date.today()).days <= dte[1]][:settings.max_expirations_per_scan]
-                    if not eligible:
-                        st.info("No listed expirations fall within the selected date range.")
-                    frames, metas = [], []
-                    for expiration in eligible:
-                        frame, chain_meta = get_tradier_chain(symbol, expiration.isoformat())
-                        frames.append(frame); metas.append(chain_meta)
-                    chain = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-                    chain_meta = metas[-1] if metas else None
-                snapshot = latest_snapshot(price_df)
                 directions = ["put_credit", "call_credit"] if strategy.startswith("Automatic") else (["put_credit"] if strategy.startswith("Put") else ["call_credit"])
-                rankings = {}
-                for key in directions:
-                    candidates = build_credit_spreads(chain, symbol, key, delta_range[0], delta_range[1], target_credit, credit_tolerance, loss_range[0], loss_range[1], tuple(width), max_ba, int(min_oi), fees)
-                    scored = (score_candidate_with_context(c, snapshot, underlying_signal, market_regime) for c in candidates)
-                    rankings[key] = [] if (underlying_signal.stale or market_regime.stale) else sorted(
-                        (c for c in scored if c.return_on_risk >= min_ror), key=lambda x: x.score, reverse=True
-                    )
-
-                signal_cols = st.columns(4)
-                signal_cols[0].metric("Trend classification", underlying_signal.classification)
-                signal_cols[1].metric("Bullish signal", f"{underlying_signal.bullish_score:.1f}/100")
-                signal_cols[2].metric("Bearish signal", f"{underlying_signal.bearish_score:.1f}/100")
-                signal_cols[3].metric("Market regime", market_regime.classification)
-                st.warning("Signal and trade scores are transparent heuristics, not calibrated probabilities, expected returns, or recommendations.")
-                with st.expander("Why the signal and regime received these classifications"):
-                    st.write(list(underlying_signal.components))
-                    if underlying_signal.unavailable:
-                        st.write("Unavailable inputs", list(underlying_signal.unavailable))
-                    st.write("Market regime", list(market_regime.explanations))
-
-                if strategy.startswith("Automatic"):
-                    if decision.preferred_strategy is None:
-                        st.error("NO TRADE — " + " ".join(decision.reasons))
-                    elif not rankings.get(decision.preferred_strategy):
-                        st.error(f"NO TRADE — {decision.classification} was directionally preferred, but no spread passed liquidity, pricing, maximum-loss and return-on-risk filters.")
-                    else:
-                        st.success(f"Automatic selection: {decision.classification}. " + " ".join(decision.reasons))
-
-                all_ranked = []
-                for key, heading in (("put_credit", "Put credit spread ranking"), ("call_credit", "Call credit spread ranking")):
-                    if key not in rankings:
+                all_ranked, failures = [], []
+                for symbol in symbols:
+                    try:
+                        result = analyze_credit_spread_symbol(
+                            symbol, demo, dte, directions, delta_range, target_credit,
+                            credit_tolerance, loss_range, width, max_ba, min_oi, fees,
+                            min_ror, market_regime,
+                        )
+                    except (RateLimitExceeded, TradierError, RuntimeError, ValueError) as exc:
+                        log_failure("options_scan_symbol_failed", exc, symbol=symbol)
+                        failures.append(f"{symbol}: {exc}")
                         continue
-                    st.subheader(heading)
-                    ranked = rankings[key]
-                    if not ranked:
-                        st.info("No qualifying spreads in this direction. This is a valid result.")
-                        continue
-                    all_ranked.extend(ranked)
-                    table = pd.DataFrame([{
-                        "Score": c.score, "Expiration": c.expiration, "Short": c.short_strike, "Long": c.long_strike,
-                        "Mid credit": c.midpoint_credit, "Conservative credit": c.conservative_credit,
-                        "Max profit": c.max_profit, "Max loss": c.max_loss, "Breakeven": c.breakeven,
-                        "Return on risk %": c.return_on_risk, "Combined bid-ask": c.bid_ask_width,
-                        "|Delta|": abs(c.short_delta or 0), "OI": c.open_interest,
-                        "Transaction costs": c.transaction_cost,
-                        f"Distance beyond {c.technical_level}": c.technical_distance,
-                        "Distance (ATR)": c.technical_distance_atr,
-                    } for c in ranked])
-                    st.dataframe(table, width="stretch", hide_index=True)
-                    for index, candidate in enumerate(ranked[:3]):
-                        with st.expander(f"#{index + 1}: {candidate.expiration} · {candidate.short_strike}/{candidate.long_strike} · score {candidate.score}"):
-                            st.write("Why selected", list(candidate.reasons))
-                            st.write("Main risks", list(candidate.risks))
-                            st.write("Invalidation", candidate.invalidation)
-                            st.write("Score components", candidate.score_details)
-
+                    signal, decision, rankings = result["signal"], result["decision"], result["rankings"]
+                    st.header(f"{symbol} · ${result['spot']:.2f}")
+                    signal_cols = st.columns(4)
+                    signal_cols[0].metric("Trend", signal.classification)
+                    signal_cols[1].metric("Bullish", f"{signal.bullish_score:.1f}/100")
+                    signal_cols[2].metric("Bearish", f"{signal.bearish_score:.1f}/100")
+                    signal_cols[3].metric("Market regime", market_regime.classification)
+                    if strategy.startswith("Automatic"):
+                        if decision.preferred_strategy is None:
+                            st.error("NO TRADE — " + " ".join(decision.reasons))
+                        elif not rankings.get(decision.preferred_strategy):
+                            st.error(f"NO TRADE — {decision.classification} was preferred, but no spread passed all filters.")
+                        else:
+                            st.success(f"Automatic selection: {decision.classification}. " + " ".join(decision.reasons))
+                    with st.expander(f"{symbol} signal evidence"):
+                        st.write(list(signal.components)); st.write("Market regime", list(market_regime.explanations))
+                        if signal.unavailable: st.write("Unavailable inputs", list(signal.unavailable))
+                    for key, heading in (("put_credit", "Put credit spreads"), ("call_credit", "Call credit spreads")):
+                        if key not in rankings: continue
+                        ranked = rankings[key]
+                        st.subheader(heading)
+                        if not ranked:
+                            st.info("No qualifying spreads in this direction."); continue
+                        all_ranked.extend(ranked)
+                        st.dataframe(pd.DataFrame([{
+                            "Symbol": c.symbol, "Score": c.score, "Expiration": c.expiration,
+                            "Short": c.short_strike, "Long": c.long_strike,
+                            "Mid credit": c.midpoint_credit, "Conservative credit": c.conservative_credit,
+                            "Max profit after costs": c.max_profit, "Max loss after costs": c.max_loss,
+                            "Breakeven": c.breakeven, "Reward/risk": round(c.max_profit / c.max_loss, 3),
+                            "Return on risk %": c.return_on_risk, "Combined bid-ask": c.bid_ask_width,
+                            "|Delta|": abs(c.short_delta or 0), "Delta-based OTM estimate %": c.estimated_otm_probability,
+                            "OI": c.open_interest, "Transaction costs": c.transaction_cost,
+                            f"Distance beyond {c.technical_level}": c.technical_distance,
+                            "Distance (ATR)": c.technical_distance_atr,
+                        } for c in ranked]), width="stretch", hide_index=True)
+                        for index, candidate in enumerate(ranked[:3]):
+                            with st.expander(f"#{index + 1}: {candidate.expiration} · {candidate.short_strike}/{candidate.long_strike} · score {candidate.score}"):
+                                st.write("Why selected", list(candidate.reasons)); st.write("Main risks", list(candidate.risks))
+                                st.write("Invalidation", candidate.invalidation); st.write("Score components", candidate.score_details)
+                                st.caption("The OTM estimate is 1 − absolute Tradier delta. It is a rough model-based approximation, not a probability guarantee.")
+                    source_line(result["price_meta"])
+                    if result["chain_meta"]: source_line(result["chain_meta"])
+                    if result["chain"].get("delta", pd.Series(dtype=float)).isna().any():
+                        st.warning("Contracts with missing Tradier Greeks were excluded; no estimates were substituted.")
+                if failures: st.warning("Unavailable symbols: " + " | ".join(failures))
                 if all_ranked:
-                    labels = [f"{c.strategy} · {c.expiration} · {c.short_strike}/{c.long_strike} · {c.score}" for c in all_ranked]
+                    labels = [f"{c.symbol} · {c.strategy} · {c.expiration} · {c.short_strike}/{c.long_strike} · {c.score}" for c in all_ranked]
                     chosen = all_ranked[labels.index(st.selectbox("Expiration payoff chart", labels))]
                     prices = np.linspace(chosen.long_strike - chosen.width, chosen.short_strike + chosen.width, 180)
-                    payoff = payoff_at_expiration(chosen, prices)
-                    fig = go.Figure(go.Scatter(x=prices, y=payoff, fill="tozeroy", line={"color": "#43d9ad"}))
+                    fig = go.Figure(go.Scatter(x=prices, y=payoff_at_expiration(chosen, prices), fill="tozeroy", line={"color": "#43d9ad"}))
                     fig.add_vline(x=chosen.breakeven, line_dash="dash", annotation_text="Breakeven")
-                    fig.update_layout(template="plotly_dark", paper_bgcolor="#0b111b", plot_bgcolor="#0b111b", font={"color":"#dfe7f1"}, xaxis_title="Underlying at expiration", yaxis_title="P/L per spread ($, before transaction costs)", height=390, xaxis={"gridcolor":"#202b3a"}, yaxis={"gridcolor":"#202b3a"})
+                    fig.update_layout(template="plotly_dark", paper_bgcolor="#0b111b", plot_bgcolor="#0b111b", xaxis_title="Underlying at expiration", yaxis_title="P/L per spread ($, before transaction costs)", height=390)
                     st.plotly_chart(fig, width="stretch")
-                source_line(price_meta)
-                if chain_meta: source_line(chain_meta)
-                if chain.get("delta", pd.Series(dtype=float)).isna().any():
-                    st.warning("One or more Tradier contracts have missing Greeks. They were excluded; no model estimates were substituted.")
+                elif not failures:
+                    st.info("NO TRADE — no candidate met all configured criteria.")
+                st.warning("Scores and delta-based OTM estimates are heuristics, not calibrated probabilities, expected returns, or recommendations.")
             except (RateLimitExceeded, TradierError, RuntimeError, ValueError) as exc:
-                log_failure("options_scan_failed", exc, symbol=symbol)
+                log_failure("options_scan_failed", exc)
                 st.error(str(exc))
             except Exception as exc:
-                log_failure("options_scan_unexpected_failure", exc, symbol=symbol)
+                log_failure("options_scan_unexpected_failure", exc)
                 st.error("The options scan could not be completed. No order was sent. Please try again later.")
 
 elif page == "Trade Journal" and not settings.public_mode:

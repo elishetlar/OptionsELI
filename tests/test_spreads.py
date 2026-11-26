@@ -18,6 +18,7 @@ def test_put_credit_math_and_payoff():
     assert spread.max_profit == 105
     assert spread.max_loss == 395
     assert spread.breakeven == 98.95
+    assert spread.estimated_otm_probability == 88.0
     assert np.allclose(payoff_at_expiration(spread, np.array([94, 100, 105])), [-395, 105, 105])
 
 

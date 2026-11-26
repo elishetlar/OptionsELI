@@ -11,6 +11,7 @@ class DataMeta:
     is_synthetic: bool = False
     is_delayed: bool = False
     note: str = ""
+    observed_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,3 +44,4 @@ class SpreadCandidate:
     technical_distance: float | None = None
     technical_distance_atr: float | None = None
     technical_level: str = ""
+    estimated_otm_probability: float | None = None

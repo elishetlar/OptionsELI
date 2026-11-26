@@ -3,10 +3,8 @@
 OptionsELI is a local, dark-mode Streamlit research dashboard for market analysis,
 liquid-stock scanning, and put/call credit-spread evaluation. It never places orders.
 
-> **Cloud-data note:** Tradier documents non-Partner API use as personal-only, but
-> does not clearly authorize a personal token on a private single-user cloud host.
-> Local Tradier scanning remains supported. Cloud Tradier access stays disabled until
-> explicit written authorization is obtained.
+> **Cloud-data note:** The owner has Tradier's permission to use a personal token in
+> the private, single-user deployment. Public redistribution remains disabled.
 
 > **Risk warning:** Options can lose the full amount at risk. Credit spreads carry
 > early-assignment, expiration/pin, liquidity, gap, data-quality, and correlated-position
@@ -17,7 +15,7 @@ liquid-stock scanning, and put/call credit-spread evaluation. It never places or
 
 - Market overview for SPY, QQQ, IWM, and VIX
 - A configurable 50-symbol scanner and core technical indicators
-- Official Tradier read-only option-chain access (sandbox-first)
+- Official Tradier read-only production quotes, history, expirations, and option chains
 - Automatic or manual put/call credit-spread construction with matching expirations
 - Bullish/bearish signal scoring, SPY/QQQ/VIX regime filtering, and No Trade outcomes
 - Adjustable risk, delta, credit, width, liquidity, and cost filters
@@ -31,8 +29,7 @@ See `PLAN.md` for architecture, verification gates, and later phases.
 
 OptionsELI relies on Streamlit Community Cloud private sharing for authenticated
 viewer access. Cloud mode removes credential settings, the personal journal, and
-SQLite access. See `DEPLOY.md` for private sharing, server-side secrets, testing,
-and the Tradier permission checklist.
+SQLite access. See `DEPLOY.md` for private sharing, server-side secrets, and testing.
 
 ## Beginner-friendly Mac setup
 
@@ -84,10 +81,15 @@ pytest -q
 ## Data behavior
 
 - Demo mode is synthetic, deterministic, and prominently labeled.
-- Stock data outside demo mode comes from Yahoo Finance through `yfinance`; it may be
-  delayed and is not an official exchange feed.
-- Option chains come from the official Tradier API. Sandbox data can be delayed.
+- With a Tradier token configured, stock quotes, daily history, expirations, and
+  option chains come from the official read-only Tradier API. Yahoo Finance is only
+  the local no-token fallback for stock history; it is never used after a Tradier
+  live-data failure.
+- Production timing depends on the account entitlement and instrument. Provider
+  timestamps are displayed; sandbox feeds are delayed.
 - Contracts without Greeks are excluded, and model Greeks are not substituted.
+- The displayed OTM estimate is `1 − |short delta|`, clearly labeled as a rough
+  model-based approximation—not a calibrated probability or guarantee.
 - The earnings exclusion blocks individual-stock scans when no verified calendar is
   configured. It never invents earnings dates.
 - No economic events are shown until a verified provider is added.

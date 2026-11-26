@@ -72,6 +72,7 @@ def build_credit_spreads(
                     return_on_risk=round(max_profit / max_loss * 100, 2),
                     bid_ask_width=round((float(short["ask"]) - float(short["bid"])) + (float(long["ask"]) - float(long["bid"])), 2),
                     transaction_cost=round(transaction_cost, 2),
+                    estimated_otm_probability=round(max(0.0, min(100.0, (1 - abs(float(delta))) * 100)), 1),
                 ))
     return results
 

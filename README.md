@@ -29,10 +29,10 @@ See `PLAN.md` for architecture, verification gates, and later phases.
 
 ## Private cloud deployment
 
-OptionsELI includes an authenticated Streamlit Community Cloud entrypoint with OIDC
-email allowlisting before market-data code loads. Cloud mode removes credential
-settings, the personal journal, and SQLite access. See `DEPLOY.md` for the private
-sharing, Google OIDC, server-side secrets, testing, and Tradier permission checklist.
+OptionsELI relies on Streamlit Community Cloud private sharing for authenticated
+viewer access. Cloud mode removes credential settings, the personal journal, and
+SQLite access. See `DEPLOY.md` for private sharing, server-side secrets, testing,
+and the Tradier permission checklist.
 
 ## Beginner-friendly Mac setup
 

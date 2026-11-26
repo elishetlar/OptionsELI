@@ -3,7 +3,6 @@ import sys
 import types
 from pathlib import Path
 
-import pytest
 from streamlit.testing.v1 import AppTest
 
 from optionseli.config import Settings
@@ -12,18 +11,13 @@ from optionseli.demo_data import demo_prices
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
 
-@pytest.fixture(autouse=True)
-def authenticated_cloud_session(monkeypatch):
-    import optionseli.cloud_auth
-
-    monkeypatch.setattr(optionseli.cloud_auth, "require_cloud_auth", lambda st, secrets: True)
-
-
 def test_public_entrypoint_executes_app_on_every_rerun(monkeypatch):
     import optionseli.market_data
     monkeypatch.setattr(optionseli.market_data, "yahoo_history", demo_prices)
     source = ENTRYPOINT.read_text()
     assert "runpy.run_path" in source
+    assert "cloud_auth" not in source
+    assert "st.login" not in source
     tree = ast.parse(source)
     assert not any(isinstance(node, ast.Import) and any(alias.name == "app" for alias in node.names) for node in ast.walk(tree))
 
